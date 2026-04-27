@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DB 격리 수준 & Lock 시뮬레이터</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #ffffff;
+    --bg2: #f7f7f5;
+    --bg3: #f0efe9;
+    --text: #1a1a18;
+    --text2: #5f5e5a;
+    --text3: #888780;
+    --border: rgba(0,0,0,0.12);
+    --border2: rgba(0,0,0,0.22);
+    --blue-bg: #e6f1fb;
+    --blue-text: #185fa5;
+    --blue-border: #85b7eb;
+    --green-bg: #eaf3de;
+    --green-text: #3b6d11;
+    --green-border: #97c459;
+    --amber-bg: #faeeda;
+    --amber-text: #854f0b;
+    --amber-border: #ef9f27;
+    --red-bg: #fcebeb;
+    --red-text: #a32d2d;
+    --red-border: #f09595;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1c;
+      --bg2: #252523;
+      --bg3: #2c2c2a;
+      --text: #e8e6de;
+      --text2: #9c9a92;
+      --text3: #6e6c65;
+      --border: rgba(255,255,255,0.1);
+      --border2: rgba(255,255,255,0.2);
+      --blue-bg: #0c3356;
+      --blue-text: #85b7eb;
+      --blue-border: #185fa5;
+      --green-bg: #173404;
+      --green-text: #97c459;
+      --green-border: #3b6d11;
+      --amber-bg: #412402;
+      --amber-text: #ef9f27;
+      --amber-border: #854f0b;
+      --red-bg: #501313;
+      --red-text: #f09595;
+      --red-border: #a32d2d;
+    }
+  }
+
+  body {
+    font-family: var(--font);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg3);
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .page-header {
+    margin-bottom: 20px;
+  }
+  .page-header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .page-header p {
+    font-size: 13px;
+    color: var(--text2);
+  }
+
+  .card {
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .ctrl-box {
+    background: var(--bg2);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+  }
+  .ctrl-box label {
+    display: block;
+    font-size: 11px;
+    color: var(--text2);
+    font-weight: 600;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ctrl-box select {
+    width: 100%;
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 0.5px solid var(--border2);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .scene {
+    display: grid;
+    grid-template-columns: 1fr 200px 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  @media (max-width: 640px) {
+    .scene { grid-template-columns: 1fr; }
+    .controls { grid-template-columns: 1fr; }
+    .summary { grid-template-columns: 1fr 1fr; }
+  }
+
+  .tx-panel {
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .tx-panel.tx-t1 { border-top: 3px solid #185fa5; }
+  .tx-panel.tx-t2 { border-top: 3px solid #0f6e56; }
+
+  .tx-header {
+    padding: 9px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-bottom: 0.5px solid var(--border);
+    background: var(--bg2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .tx-steps {
+    padding: 8px;
+    min-height: 280px;
+  }
+
+  .step {
+    padding: 6px 9px;
+    border-radius: 6px;
+    margin-bottom: 4px;
+    font-size: 11px;
+    line-height: 1.5;
+    border: 0.5px solid transparent;
+    transition: background 0.15s;
+  }
+  .step.active { background: var(--blue-bg); border-color: var(--blue-border); }
+  .step.done { opacity: 0.5; }
+  .step.blocked { background: var(--amber-bg); border-color: var(--amber-border); }
+  .step.anomaly { background: var(--red-bg); border-color: var(--red-border); }
+  .step-label {
+    font-weight: 700;
+    color: var(--text3);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+  }
+
+  .badge {
+    padding: 2px 9px;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .badge-blue { background: var(--blue-bg); color: var(--blue-text); }
+  .badge-green { background: var(--green-bg); color: var(--green-text); }
+  .badge-amber { background: var(--amber-bg); color: var(--amber-text); }
+
+  .db-panel {
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .db-header {
+    padding: 9px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-bottom: 0.5px solid var(--border);
+    background: var(--bg2);
+    text-align: center;
+  }
+  .db-table { padding: 8px; }
+
+  .db-row {
+    display: grid;
+    grid-template-columns: 24px 1fr 56px;
+    gap: 4px;
+    padding: 5px 6px;
+    border-radius: 5px;
+    margin-bottom: 3px;
+    font-size: 11px;
+    align-items: center;
+    border: 0.5px solid transparent;
+    transition: all 0.25s;
+  }
+  .db-row.hdr { font-weight: 600; color: var(--text3); font-size: 10px; }
+  .db-row.locked-s { background: var(--blue-bg); border-color: var(--blue-border); }
+  .db-row.locked-x { background: var(--amber-bg); border-color: var(--amber-border); }
+  .db-row.dirty { background: var(--red-bg); border-color: var(--red-border); }
+  .db-row.phantom { background: var(--green-bg); border-color: var(--green-border); }
+  .lock-icon { font-size: 12px; text-align: center; }
+
+  .locks-panel {
+    margin: 0 8px 8px;
+    border-top: 0.5px solid var(--border);
+    padding-top: 8px;
+  }
+  .locks-panel .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+  .lock-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+  .lock-entry.s { background: var(--blue-bg); color: var(--blue-text); }
+  .lock-entry.x { background: var(--amber-bg); color: var(--amber-text); }
+  .mvcc-entry {
+    font-size: 10px;
+    padding: 3px 7px;
+    border-radius: 4px;
+    margin-bottom: 2px;
+    background: var(--bg2);
+    color: var(--text2);
+  }
+  .empty-label { font-size: 10px; color: var(--text3); padding: 0 2px; }
+
+  .section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text2);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .log-panel {
+    background: var(--bg2);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    min-height: 80px;
+    max-height: 120px;
+    overflow-y: auto;
+    margin-bottom: 14px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .log-entry {
+    font-size: 11px;
+    padding: 2px 0;
+    border-bottom: 0.5px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    line-height: 1.5;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { color: var(--text3); min-width: 28px; font-size: 10px; margin-top: 1px; }
+  .log-tx1 { color: #185fa5; }
+  .log-tx2 { color: #0f6e56; }
+  .log-warn { color: #854f0b; }
+  .log-err { color: #a32d2d; }
+
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  button {
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 0.5px solid var(--border2);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  button:hover { background: var(--bg2); }
+  button:active { transform: scale(0.98); }
+  #step-info { font-size: 11px; color: var(--text3); }
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .sum-card {
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 10px 8px;
+    background: var(--bg);
+    transition: border 0.2s;
+  }
+  .sum-card .lv {
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 8px;
+    color: var(--text2);
+  }
+  .sum-card .problems { display: flex; flex-direction: column; gap: 3px; }
+  .prob {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-align: center;
+    font-weight: 500;
+  }
+  .prob.ok { background: var(--green-bg); color: var(--green-text); }
+  .prob.no { background: var(--red-bg); color: var(--red-text); }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text2);
+    margin-bottom: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="page-header">
+    <h1>DB 격리 수준 &amp; Lock 시뮬레이터</h1>
+    <p>두 트랜잭션의 동시 실행 과정을 단계별로 시각화합니다. 격리 수준과 시나리오를 바꿔가며 이상 현상을 직접 확인해보세요.</p>
+  </div>
+
+  <div class="controls">
+    <div class="ctrl-box">
+      <label>격리 수준 (Isolation Level)</label>
+      <select id="iso-select" onchange="setup()">
+        <option value="0">Read Uncommitted</option>
+        <option value="1" selected>Read Committed</option>
+        <option value="2">Repeatable Read</option>
+        <option value="3">Serializable</option>
+      </select>
+    </div>
+    <div class="ctrl-box">
+      <label>시나리오 (Anomaly)</label>
+      <select id="scenario-select" onchange="setup()">
+        <option value="dirty">Dirty Read</option>
+        <option value="nonrep">Non-repeatable Read</option>
+        <option value="phantom">Phantom Read</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="legend-item"><span class="legend-dot" style="background:var(--blue-bg);border:1px solid var(--blue-border)"></span>현재 단계 / S-Lock</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--amber-bg);border:1px solid var(--amber-border)"></span>블로킹 / X-Lock</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--red-bg);border:1px solid var(--red-border)"></span>이상 현상 발생</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--green-bg);border:1px solid var(--green-border)"></span>새 row (Phantom)</span>
+  </div>
+
+  <div class="scene">
+    <div class="tx-panel tx-t1">
+      <div class="tx-header">
+        <span>T1 (Transaction 1)</span>
+        <span id="t1-status" class="badge badge-blue">대기</span>
+      </div>
+      <div class="tx-steps" id="t1-steps"></div>
+    </div>
+
+    <div class="db-panel">
+      <div class="db-header">데이터베이스</div>
+      <div class="db-table" id="db-view"></div>
+      <div class="locks-panel" id="locks-view">
+        <div class="section-label">Active Locks</div>
+      </div>
+      <div class="locks-panel" id="mvcc-view">
+        <div class="section-label">MVCC 버전</div>
+      </div>
+    </div>
+
+    <div class="tx-panel tx-t2">
+      <div class="tx-header">
+        <span>T2 (Transaction 2)</span>
+        <span id="t2-status" class="badge badge-green">대기</span>
+      </div>
+      <div class="tx-steps" id="t2-steps"></div>
+    </div>
+  </div>
+
+  <div class="section-title">실행 로그</div>
+  <div class="log-panel" id="log-panel"></div>
+
+  <div class="btn-row">
+    <button onclick="stepForward()">▶ 다음 단계</button>
+    <button onclick="autoPlay()" id="btn-auto">⏩ 자동 실행</button>
+    <button onclick="setup()">↺ 초기화</button>
+    <span id="step-info"></span>
+  </div>
+
+  <div class="section-title">격리 수준별 이상 현상 비교</div>
+  <div class="summary">
+    <div class="sum-card" id="sum-0">
+      <div class="lv">Read Uncommitted</div>
+      <div class="problems">
+        <div class="prob no">Dirty Read ✕</div>
+        <div class="prob no">Non-repeatable ✕</div>
+        <div class="prob no">Phantom Read ✕</div>
+      </div>
+    </div>
+    <div class="sum-card" id="sum-1">
+      <div class="lv">Read Committed</div>
+      <div class="problems">
+        <div class="prob ok">Dirty Read ✓</div>
+        <div class="prob no">Non-repeatable ✕</div>
+        <div class="prob no">Phantom Read ✕</div>
+      </div>
+    </div>
+    <div class="sum-card" id="sum-2">
+      <div class="lv">Repeatable Read</div>
+      <div class="problems">
+        <div class="prob ok">Dirty Read ✓</div>
+        <div class="prob ok">Non-repeatable ✓</div>
+        <div class="prob no">Phantom Read ✕</div>
+      </div>
+    </div>
+    <div class="sum-card" id="sum-3">
+      <div class="lv">Serializable</div>
+      <div class="problems">
+        <div class="prob ok">Dirty Read ✓</div>
+        <div class="prob ok">Non-repeatable ✓</div>
+        <div class="prob ok">Phantom Read ✓</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let dbData = [], locks = {}, mvccVersions = [], logEntries = [];
+let steps = [], stepIdx = 0, iso = 1, scenario = 'dirty';
+let autoTimer = null;
+
+function getIso(){ return parseInt(document.getElementById('iso-select').value); }
+function getScenario(){ return document.getElementById('scenario-select').value; }
+
+function buildScenario(iso, scenario){
+  const db0 = [{id:1,name:'Alice',balance:1000},{id:2,name:'Bob',balance:500}];
+
+  if(scenario === 'dirty'){
+    return {
+      db: JSON.parse(JSON.stringify(db0)),
+      steps: [
+        {tx:2,op:'begin',label:'BEGIN',desc:'T2 트랜잭션 시작'},
+        {tx:1,op:'begin',label:'BEGIN',desc:'T1 트랜잭션 시작'},
+        {tx:2,op:'write',label:'UPDATE balance=1500 WHERE id=1',desc:'T2가 Alice 잔액을 1500으로 수정 (미커밋)',dbChange:{row:0,field:'balance',val:1500,dirty:true},lockOp:{type:'X',tx:2,rowId:0},mvcc:{version:'v2',rowId:0,val:1500,tx:2}},
+        {tx:1,op:'read',label:'SELECT balance WHERE id=1',desc:iso===0?'⚠ T1이 미커밋 데이터 1500 읽음 → Dirty Read 발생!':'✓ T1이 커밋된 데이터 1000 읽음 (안전)',lockOp:iso>=2?{type:'S',tx:1,rowId:0}:null,anomaly:iso===0,anomalyType:'dirty'},
+        {tx:2,op:'rollback',label:'ROLLBACK',desc:'T2 롤백! 실제 잔액은 여전히 1000',dbChange:{row:0,field:'balance',val:1000,dirty:false},lockOp:{release:true,tx:2,rowId:0}},
+        {tx:1,op:'commit',label:'COMMIT',desc:iso===0?'⚠ T1이 읽은 1500은 존재하지 않는 데이터였음':'✓ T1 커밋 완료 — 정상',lockOp:{release:true,tx:1,rowId:0}},
+      ]
+    };
+  }
+  if(scenario === 'nonrep'){
+    return {
+      db: JSON.parse(JSON.stringify(db0)),
+      steps: [
+        {tx:1,op:'begin',label:'BEGIN',desc:'T1 트랜잭션 시작'},
+        {tx:2,op:'begin',label:'BEGIN',desc:'T2 트랜잭션 시작'},
+        {tx:1,op:'read',label:'SELECT balance WHERE id=1 → 1000',desc:'T1이 Alice 잔액 1000 첫 번째 읽기',lockOp:iso>=2?{type:'S',tx:1,rowId:0}:null},
+        {tx:2,op:'write',label:'UPDATE balance=800 WHERE id=1',desc:'T2가 Alice 잔액을 800으로 수정 후 커밋',dbChange:{row:0,field:'balance',val:800,dirty:false},lockOp:iso>=2?{type:'blocked',tx:2,rowId:0}:{type:'X',tx:2,rowId:0},blocked:iso>=2},
+        {tx:2,op:'commit',label:'COMMIT',desc:iso<2?'T2 커밋 완료':iso>=2?'T2 대기 중 (S Lock으로 인한 블로킹)':'T2 커밋',lockOp:iso>=2?null:{release:true,tx:2,rowId:0}},
+        {tx:1,op:'read',label:'SELECT balance WHERE id=1 → ?',desc:iso<2?'⚠ T1이 두 번째 읽기에서 800 읽음 → Non-repeatable Read!':'✓ T1이 두 번째 읽기에서도 1000 읽음 (Repeatable)',anomaly:iso<2,anomalyType:'nonrep'},
+        {tx:1,op:'commit',label:'COMMIT',desc:'T1 커밋',lockOp:{release:true,tx:1,rowId:0}},
+      ]
+    };
+  }
+  if(scenario === 'phantom'){
+    return {
+      db: JSON.parse(JSON.stringify(db0)),
+      steps: [
+        {tx:1,op:'begin',label:'BEGIN',desc:'T1 트랜잭션 시작'},
+        {tx:2,op:'begin',label:'BEGIN',desc:'T2 트랜잭션 시작'},
+        {tx:1,op:'read',label:'SELECT * WHERE balance>400 → 2건',desc:'T1이 balance>400 조건으로 첫 번째 조회 (Alice 1000, Bob 500 = 2건)'},
+        {tx:2,op:'write',label:'INSERT (id=3, Carol, balance=600)',desc:'T2가 새 row 삽입 (Carol, 600)',dbChange:{row:'insert',id:3,name:'Carol',balance:600},lockOp:iso===3?{type:'range-X',tx:2,rowId:'range'}:null,blocked:iso===3},
+        {tx:2,op:'commit',label:'COMMIT',desc:iso===3?'T2 Range Lock으로 블로킹':'T2 커밋 완료'},
+        {tx:1,op:'read',label:'SELECT * WHERE balance>400 → ?',desc:iso<3?'⚠ T1 두 번째 조회: 3건 (Carol 추가됨) → Phantom Read!':'✓ T1 두 번째 조회: 2건 (Range Lock으로 차단)',anomaly:iso<3,anomalyType:'phantom'},
+        {tx:1,op:'commit',label:'COMMIT',desc:'T1 커밋'},
+      ]
+    };
+  }
+}
+
+function setup(){
+  iso = getIso();
+  scenario = getScenario();
+  const sc = buildScenario(iso, scenario);
+  dbData = sc.db;
+  steps = sc.steps;
+  stepIdx = 0;
+  locks = {};
+  mvccVersions = [];
+  logEntries = [];
+  if(autoTimer){ clearInterval(autoTimer); autoTimer = null; document.getElementById('btn-auto').textContent = '⏩ 자동 실행'; }
+  renderAll();
+  highlightSummary();
+  document.getElementById('step-info').textContent = `0 / ${steps.length} 단계`;
+}
+
+function renderAll(){
+  renderTxSteps();
+  renderDB();
+  renderLocks();
+  renderLog();
+  updateStatus();
+}
+
+function renderTxSteps(){
+  const t1 = document.getElementById('t1-steps');
+  const t2 = document.getElementById('t2-steps');
+  t1.innerHTML = ''; t2.innerHTML = '';
+  steps.forEach((s, i) => {
+    const done = i < stepIdx;
+    const active = i === stepIdx;
+    const el = document.createElement('div');
+    let cls = 'step';
+    if(active) cls += s.blocked ? ' blocked' : ' active';
+    else if(done) cls += s.anomaly ? ' anomaly' : ' done';
+    el.className = cls;
+    el.innerHTML = `<div class="step-label">${s.op.toUpperCase()}</div><div>${s.label}</div>`;
+    (s.tx === 1 ? t1 : t2).appendChild(el);
+  });
+}
+
+function renderDB(){
+  const el = document.getElementById('db-view');
+  el.innerHTML = `<div class="db-row hdr"><span>id</span><span>name / balance</span><span>상태</span></div>`;
+  dbData.forEach((r, i) => {
+    const div = document.createElement('div');
+    let cls = 'db-row';
+    let status = '정상'; let icon = '';
+    const xlock = Object.values(locks).find(v => v.type === 'X' && v.rowId === i);
+    const slock = Object.values(locks).find(v => v.type === 'S' && v.rowId === i);
+    const blocked = Object.values(locks).find(v => v.type === 'blocked' && v.rowId === i);
+    if(blocked){ cls += ' locked-x'; status = '블로킹'; icon = '⏸'; }
+    else if(xlock){ cls += ' locked-x'; status = 'X-Lock'; icon = '🔒'; }
+    else if(slock){ cls += ' locked-s'; status = 'S-Lock'; icon = '🔓'; }
+    if(r.dirty){ cls += ' dirty'; status = '미커밋'; icon = '⚠'; }
+    div.className = cls;
+    div.innerHTML = `<span>${r.id}</span><span>${r.name}<br><strong>${r.balance}</strong></span><span class="lock-icon">${icon}<div style="font-size:9px;color:var(--text3)">${status}</div></span>`;
+    el.appendChild(div);
+  });
+  if(getScenario() === 'phantom'){
+    const p = dbData.find(r => r.id === 3);
+    if(p){
+      const div = document.createElement('div');
+      div.className = 'db-row phantom';
+      div.innerHTML = `<span>${p.id}</span><span>${p.name}<br><strong>${p.balance}</strong></span><span class="lock-icon">👻<div style="font-size:9px;color:var(--text3)">NEW</div></span>`;
+      el.appendChild(div);
+    }
+  }
+}
+
+function renderLocks(){
+  const lv = document.getElementById('locks-view');
+  lv.innerHTML = '<div class="section-label">Active Locks</div>';
+  const entries = Object.entries(locks);
+  if(!entries.length){ lv.innerHTML += '<div class="empty-label">없음</div>'; }
+  else entries.forEach(([k, v]) => {
+    const d = document.createElement('div');
+    const type = v.type === 'blocked' ? 'WAIT' : v.type === 'range-X' ? 'Range-X' : v.type;
+    d.className = 'lock-entry ' + (v.type === 'X' || v.type === 'range-X' ? 'x' : 's');
+    d.innerHTML = `<span>T${v.tx} → row ${typeof v.rowId === 'number' ? v.rowId+1 : v.rowId}</span><span>${type}</span>`;
+    lv.appendChild(d);
+  });
+  const mv = document.getElementById('mvcc-view');
+  mv.innerHTML = '<div class="section-label">MVCC 버전</div>';
+  if(!mvccVersions.length){ mv.innerHTML += '<div class="empty-label">없음</div>'; }
+  else mvccVersions.forEach(v => {
+    const d = document.createElement('div');
+    d.className = 'mvcc-entry';
+    d.innerHTML = `row ${v.rowId+1} ${v.version}: balance=${v.val} <span style="color:var(--text3)">(T${v.tx})</span>`;
+    mv.appendChild(d);
+  });
+}
+
+function renderLog(){
+  const el = document.getElementById('log-panel');
+  el.innerHTML = '';
+  logEntries.forEach(e => {
+    const d = document.createElement('div');
+    d.className = 'log-entry';
+    d.innerHTML = `<span class="log-time">t${e.t}</span><span class="${e.cls}">${e.msg}</span>`;
+    el.appendChild(d);
+  });
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateStatus(){
+  const started1 = steps.slice(0, stepIdx).some(s => s.tx === 1 && s.op === 'begin');
+  const started2 = steps.slice(0, stepIdx).some(s => s.tx === 2 && s.op === 'begin');
+  const done1 = steps.slice(0, stepIdx).some(s => s.tx === 1 && (s.op === 'commit' || s.op === 'rollback'));
+  const done2 = steps.slice(0, stepIdx).some(s => s.tx === 2 && (s.op === 'commit' || s.op === 'rollback'));
+  const s1 = document.getElementById('t1-status');
+  const s2 = document.getElementById('t2-status');
+  s1.textContent = done1 ? '완료' : started1 ? '실행 중' : '대기';
+  s1.className = 'badge ' + (done1 ? 'badge-green' : 'badge-blue');
+  s2.textContent = done2 ? '완료' : started2 ? '실행 중' : '대기';
+  s2.className = 'badge ' + (done2 ? 'badge-green' : 'badge-green');
+}
+
+function stepForward(){
+  if(stepIdx >= steps.length) return;
+  const s = steps[stepIdx];
+  if(s.dbChange){
+    const c = s.dbChange;
+    if(c.row === 'insert'){ if(!dbData.find(r => r.id === c.id)) dbData.push({id:c.id,name:c.name,balance:c.balance}); }
+    else { const row = dbData[c.row]; if(row){ row[c.field] = c.val; row.dirty = !!c.dirty; } }
+  }
+  if(s.lockOp){
+    const op = s.lockOp;
+    if(op.release){ Object.keys(locks).filter(k => locks[k].tx === op.tx && locks[k].rowId === op.rowId).forEach(k => delete locks[k]); }
+    else { locks[`t${op.tx}_r${op.rowId}`] = {type:op.type, tx:op.tx, rowId:op.rowId}; }
+  }
+  if(s.mvcc) mvccVersions.push(s.mvcc);
+  const cls = s.anomaly ? 'log-err' : s.blocked ? 'log-warn' : s.tx === 1 ? 'log-tx1' : 'log-tx2';
+  logEntries.push({t: stepIdx+1, msg: `[T${s.tx}] ${s.desc}`, cls});
+  stepIdx++;
+  document.getElementById('step-info').textContent = `${stepIdx} / ${steps.length} 단계`;
+  renderAll();
+}
+
+function autoPlay(){
+  if(autoTimer){ clearInterval(autoTimer); autoTimer = null; document.getElementById('btn-auto').textContent = '⏩ 자동 실행'; return; }
+  document.getElementById('btn-auto').textContent = '⏹ 중지';
+  autoTimer = setInterval(() => {
+    if(stepIdx >= steps.length){ clearInterval(autoTimer); autoTimer = null; document.getElementById('btn-auto').textContent = '⏩ 자동 실행'; return; }
+    stepForward();
+  }, 1100);
+}
+
+function highlightSummary(){
+  const iso = getIso();
+  [0,1,2,3].forEach(i => {
+    document.getElementById('sum-'+i).style.border = i === iso ? '2px solid var(--blue-border)' : '0.5px solid var(--border)';
+  });
+}
+
+setup();
+</script>
+</body>
+</html>
