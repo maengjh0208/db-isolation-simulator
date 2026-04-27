@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DB Lock Manager 시뮬레이터</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f0f0d;--bg2:#161614;--bg3:#1e1e1b;--bg4:#252522;
+  --text:#e8e6de;--text2:#9c9a92;--text3:#5f5e5a;
+  --border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.15);
+  --t1:#378add;--t1bg:#0c2a46;--t1border:#185fa5;
+  --t2:#1d9e75;--t2bg:#082a1e;--t2border:#0f6e56;
+  --warn:#ef9f27;--warnbg:#251800;--warnborder:#854f0b;
+  --err:#e24b4a;--errbg:#200e0e;--errborder:#a32d2d;
+  --ok:#639922;--okbg:#111a04;--okborder:#3b6d11;
+  --radius:8px;--radius-lg:12px;
+  --font:'SF Mono','Fira Code',monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+body{font-family:var(--sans);font-size:13px;color:var(--text);background:var(--bg);min-height:100vh;padding:20px 16px}
+.container{max-width:1100px;margin:0 auto}
+
+/* Header */
+.hdr{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:8px}
+.hdr h1{font-size:18px;font-weight:600;letter-spacing:-0.02em}
+.hdr p{font-size:11px;color:var(--text3);margin-top:2px}
+.iso-row{display:flex;align-items:center;gap:8px}
+.iso-row label{font-size:11px;color:var(--text2)}
+select{background:var(--bg3);border:0.5px solid var(--border2);color:var(--text);padding:5px 8px;border-radius:var(--radius);font-size:12px;cursor:pointer}
+
+/* Top: DB state + Lock Manager */
+.top-grid{display:grid;grid-template-columns:1fr 220px;gap:10px;margin-bottom:10px}
+
+/* Panels */
+.panel{background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.panel-hdr{padding:8px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;border-bottom:0.5px solid var(--border);background:var(--bg3);display:flex;align-items:center;justify-content:space-between}
+
+/* DB Table */
+.db-grid{display:grid;grid-template-columns:36px 80px 1fr 1fr 80px;font-size:11px;gap:0}
+.db-row{display:contents}
+.db-row>span{padding:6px 8px;border-bottom:0.5px solid var(--border);display:flex;align-items:center}
+.db-row.hdr>span{font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
+.lock-badges{display:flex;flex-wrap:wrap;gap:3px}
+.lbadge{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;font-family:var(--font)}
+.lbadge.S{background:var(--t1bg);color:var(--t1);border:0.5px solid var(--t1border)}
+.lbadge.X{background:var(--warnbg);color:var(--warn);border:0.5px solid var(--warnborder)}
+.lbadge.W{background:var(--errbg);color:var(--err);border:0.5px solid var(--errborder)}
+.val-cell{font-family:var(--font);font-weight:600}
+.val-cell.dirty{color:var(--warn)}
+.val-cell.changed{color:var(--ok)}
+
+/* Version chain */
+.version-tag{font-size:9px;padding:1px 5px;border-radius:3px;font-family:var(--font);margin-left:4px;color:var(--text3);background:var(--bg4);border:0.5px solid var(--border)}
+
+/* Lock Manager Panel */
+.lm-section{padding:8px 10px;border-bottom:0.5px solid var(--border)}
+.lm-section:last-child{border-bottom:none}
+.lm-label{font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px}
+.lock-entry{display:flex;justify-content:space-between;align-items:center;padding:3px 6px;border-radius:4px;font-size:10px;font-family:var(--font);margin-bottom:2px}
+.lock-entry.held-S{background:var(--t1bg);color:var(--t1)}
+.lock-entry.held-X{background:var(--warnbg);color:var(--warn)}
+.lock-entry.wait{background:var(--errbg);color:var(--err)}
+.empty-note{font-size:10px;color:var(--text3);padding:2px 0}
+
+/* Wait-for graph */
+#wfg-svg{width:100%;height:80px}
+
+/* Tx Panels */
+.tx-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.tx-panel{background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.tx-panel.t1{border-top:2px solid var(--t1)}
+.tx-panel.t2{border-top:2px solid var(--t2)}
+.tx-hdr{padding:9px 12px;border-bottom:0.5px solid var(--border);background:var(--bg3);display:flex;align-items:center;justify-content:space-between}
+.tx-name{font-size:13px;font-weight:600}
+.tx-name.t1{color:var(--t1)}
+.tx-name.t2{color:var(--t2)}
+.tx-status{font-size:10px;padding:2px 9px;border-radius:20px;font-weight:600}
+.st-idle{background:var(--bg4);color:var(--text3)}
+.st-active{background:#0c2a46;color:var(--t1)}
+.st-active.t2{background:var(--t2bg);color:var(--t2)}
+.st-blocked{background:var(--warnbg);color:var(--warn)}
+.st-committed{background:var(--okbg);color:var(--ok)}
+.st-aborted{background:var(--errbg);color:var(--err)}
+.tx-body{padding:10px}
+.btn-group{margin-bottom:8px}
+.btn-group-label{font-size:10px;color:var(--text3);margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
+.btn-row2{display:flex;flex-wrap:wrap;gap:4px}
+.op-btn{padding:4px 10px;font-size:11px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg3);color:var(--text2);cursor:pointer;transition:all .12s;font-family:var(--sans)}
+.op-btn:hover:not(:disabled){background:var(--bg4);color:var(--text);border-color:var(--border2)}
+.op-btn:active:not(:disabled){transform:scale(0.97)}
+.op-btn:disabled{opacity:0.3;cursor:not-allowed}
+.op-btn.begin{border-color:var(--ok);color:var(--ok)}
+.op-btn.begin:hover:not(:disabled){background:var(--okbg)}
+.op-btn.commit{border-color:var(--t1);color:var(--t1)}
+.op-btn.commit:hover:not(:disabled){background:var(--t1bg)}
+.op-btn.rollback{border-color:var(--err);color:var(--err)}
+.op-btn.rollback:hover:not(:disabled){background:var(--errbg)}
+.op-btn.reset{border-color:var(--text3);color:var(--text3)}
+.tx-snapshot{font-size:10px;color:var(--text3);padding-top:6px;border-top:0.5px solid var(--border);margin-top:6px;font-family:var(--font)}
+
+/* Log */
+.log-panel{background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:10px}
+.log-body{max-height:180px;overflow-y:auto;padding:6px 8px;font-family:var(--font)}
+.log-entry{display:grid;grid-template-columns:28px 32px 1fr;gap:6px;padding:3px 4px;border-radius:4px;font-size:11px;line-height:1.4;margin-bottom:1px}
+.log-entry:hover{background:var(--bg3)}
+.log-t{color:var(--text3);font-size:10px;padding-top:1px}
+.log-tx{font-weight:600}
+.log-tx.t1{color:var(--t1)}
+.log-tx.t2{color:var(--t2)}
+.log-msg{}
+.log-msg.ok{color:var(--ok)}
+.log-msg.warn{color:var(--warn)}
+.log-msg.err{color:var(--err)}
+.log-msg.deadlock{color:var(--err);font-weight:700}
+.log-msg.unblock{color:var(--ok)}
+
+/* Scenarios */
+.scenarios{background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.sc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0}
+.sc-card{padding:12px 14px;border-right:0.5px solid var(--border);border-bottom:0.5px solid var(--border)}
+.sc-card:last-child{border-right:none}
+.sc-tag{display:inline-block;font-size:9px;padding:1px 7px;border-radius:3px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;font-family:var(--font)}
+.sc-tag.deadlock{background:var(--errbg);color:var(--err);border:0.5px solid var(--errborder)}
+.sc-tag.dirty{background:var(--warnbg);color:var(--warn);border:0.5px solid var(--warnborder)}
+.sc-tag.nonrep{background:var(--t1bg);color:var(--t1);border:0.5px solid var(--t1border)}
+.sc-tag.phantom{background:var(--okbg);color:var(--ok);border:0.5px solid var(--okborder)}
+.sc-title{font-size:12px;font-weight:600;margin-bottom:6px}
+.sc-steps{list-style:none;counter-reset:sc}
+.sc-steps li{font-size:11px;color:var(--text2);padding:2px 0 2px 20px;position:relative;line-height:1.5}
+.sc-steps li::before{content:counter(sc);counter-increment:sc;position:absolute;left:0;top:2px;font-size:9px;color:var(--text3);font-family:var(--font);font-weight:600;width:14px;text-align:right}
+.sc-steps li code{font-family:var(--font);font-size:10px;background:var(--bg4);padding:1px 5px;border-radius:3px;color:var(--text)}
+.sc-steps li.result{color:var(--err);font-weight:600}
+.sc-steps li.result.ok{color:var(--ok)}
+.sc-btn{margin-top:8px;padding:4px 12px;font-size:11px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg3);color:var(--text2);cursor:pointer;transition:all .12s}
+.sc-btn:hover{background:var(--bg4);color:var(--text)}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="hdr">
+  <div>
+    <h1>DB Lock Manager 시뮬레이터</h1>
+    <p>실제 Lock 호환성 검사 · Wait Queue · Wait-for Graph · Deadlock 감지 · MVCC</p>
+  </div>
+  <div class="iso-row">
+    <label>격리 수준</label>
+    <select id="iso-sel" onchange="changeIso(this.value)">
+      <option value="0">Read Uncommitted</option>
+      <option value="1" selected>Read Committed</option>
+      <option value="2">Repeatable Read</option>
+      <option value="3">Serializable</option>
+    </select>
+    <button class="op-btn reset" onclick="fullReset()">전체 초기화</button>
+  </div>
+</div>
+
+<!-- DB + Lock Manager -->
+<div class="top-grid">
+  <div class="panel">
+    <div class="panel-hdr">
+      <span>Database State</span>
+      <span id="ts-label" style="font-size:10px;color:var(--text3);font-family:var(--font)">ts=0</span>
+    </div>
+    <div class="db-grid" id="db-view">
+      <div class="db-row hdr">
+        <span>id</span><span>name</span><span>committed</span><span>uncommitted</span><span>locks</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hdr">Lock Manager</div>
+    <div class="lm-section">
+      <div class="lm-label">Held Locks</div>
+      <div id="held-locks"><div class="empty-note">없음</div></div>
+    </div>
+    <div class="lm-section">
+      <div class="lm-label">Wait Queue</div>
+      <div id="wait-queue"><div class="empty-note">없음</div></div>
+    </div>
+    <div class="lm-section">
+      <div class="lm-label">Wait-for Graph</div>
+      <svg id="wfg-svg" viewBox="0 0 200 80">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M2 1L8 5L2 9" fill="none" stroke="#e24b4a" stroke-width="1.5" stroke-linecap="round"/>
+          </marker>
+        </defs>
+        <text id="wfg-empty" x="100" y="44" text-anchor="middle" font-size="11" fill="#5f5e5a">대기 없음</text>
+        <g id="wfg-content" display="none">
+          <circle cx="50" cy="40" r="22" fill="#0c2a46" stroke="#185fa5" stroke-width="1"/>
+          <text x="50" y="44" text-anchor="middle" font-size="12" font-weight="600" fill="#378add">T1</text>
+          <circle cx="150" cy="40" r="22" fill="#082a1e" stroke="#0f6e56" stroke-width="1"/>
+          <text x="150" y="44" text-anchor="middle" font-size="12" font-weight="600" fill="#1d9e75">T2</text>
+          <line id="wfg-t1t2" x1="72" y1="40" x2="128" y2="40" stroke="#e24b4a" stroke-width="1.5" stroke-dasharray="4 3" display="none" marker-end="url(#arr)"/>
+          <line id="wfg-t2t1" x1="128" y1="44" x2="72" y2="44" stroke="#e24b4a" stroke-width="1.5" stroke-dasharray="4 3" display="none" marker-end="url(#arr)"/>
+          <text id="wfg-deadlock-label" x="100" y="20" text-anchor="middle" font-size="10" font-weight="700" fill="#e24b4a" display="none">⚠ DEADLOCK</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<!-- Transactions -->
+<div class="tx-grid">
+  <!-- T1 -->
+  <div class="tx-panel t1">
+    <div class="tx-hdr">
+      <span class="tx-name t1">T1 — Transaction 1</span>
+      <span id="t1-status" class="tx-status st-idle">idle</span>
+    </div>
+    <div class="tx-body">
+      <div class="btn-group">
+        <div class="btn-group-label">제어</div>
+        <div class="btn-row2">
+          <button class="op-btn begin" onclick="beginTx(1)">BEGIN</button>
+          <button class="op-btn commit" onclick="commitTx(1)">COMMIT</button>
+          <button class="op-btn rollback" onclick="rollbackTx(1)">ROLLBACK</button>
+          <button class="op-btn reset" onclick="resetOneTx(1)">Reset</button>
+        </div>
+      </div>
+      <div class="btn-group">
+        <div class="btn-group-label">읽기 (SELECT)</div>
+        <div class="btn-row2">
+          <button class="op-btn" onclick="readRow(1,1)">READ row1</button>
+          <button class="op-btn" onclick="readRow(1,2)">READ row2</button>
+          <button class="op-btn" onclick="readRow(1,3)">READ row3</button>
+        </div>
+      </div>
+      <div class="btn-group">
+        <div class="btn-group-label">쓰기 (UPDATE)</div>
+        <div class="btn-row2">
+          <button class="op-btn" onclick="writeRow(1,1,999)">WRITE row1=999</button>
+          <button class="op-btn" onclick="writeRow(1,2,888)">WRITE row2=888</button>
+          <button class="op-btn" onclick="writeRow(1,3,777)">WRITE row3=777</button>
+        </div>
+      </div>
+      <div class="tx-snapshot" id="t1-snapshot">snapshot_ts: — &nbsp;|&nbsp; status: idle</div>
+    </div>
+  </div>
+
+  <!-- T2 -->
+  <div class="tx-panel t2">
+    <div class="tx-hdr">
+      <span class="tx-name t2">T2 — Transaction 2</span>
+      <span id="t2-status" class="tx-status st-idle">idle</span>
+    </div>
+    <div class="tx-body">
+      <div class="btn-group">
+        <div class="btn-group-label">제어</div>
+        <div class="btn-row2">
+          <button class="op-btn begin" onclick="beginTx(2)">BEGIN</button>
+          <button class="op-btn commit" onclick="commitTx(2)">COMMIT</button>
+          <button class="op-btn rollback" onclick="rollbackTx(2)">ROLLBACK</button>
+          <button class="op-btn reset" onclick="resetOneTx(2)">Reset</button>
+        </div>
+      </div>
+      <div class="btn-group">
+        <div class="btn-group-label">읽기 (SELECT)</div>
+        <div class="btn-row2">
+          <button class="op-btn" onclick="readRow(2,1)">READ row1</button>
+          <button class="op-btn" onclick="readRow(2,2)">READ row2</button>
+          <button class="op-btn" onclick="readRow(2,3)">READ row3</button>
+        </div>
+      </div>
+      <div class="btn-group">
+        <div class="btn-group-label">쓰기 (UPDATE)</div>
+        <div class="btn-row2">
+          <button class="op-btn" onclick="writeRow(2,1,111)">WRITE row1=111</button>
+          <button class="op-btn" onclick="writeRow(2,2,222)">WRITE row2=222</button>
+          <button class="op-btn" onclick="writeRow(2,3,333)">WRITE row3=333</button>
+        </div>
+      </div>
+      <div class="tx-snapshot" id="t2-snapshot">snapshot_ts: — &nbsp;|&nbsp; status: idle</div>
+    </div>
+  </div>
+</div>
+
+<!-- Log -->
+<div class="log-panel">
+  <div class="panel-hdr">
+    <span>실행 로그</span>
+    <button class="op-btn reset" style="font-size:10px;padding:2px 8px" onclick="clearLog()">지우기</button>
+  </div>
+  <div class="log-body" id="log-body"></div>
+</div>
+
+<!-- Test Scenarios -->
+<div class="scenarios">
+  <div class="panel-hdr">시뮬레이션 테스트 시나리오</div>
+  <div class="sc-grid">
+
+    <div class="sc-card">
+      <span class="sc-tag deadlock">Deadlock</span>
+      <div class="sc-title">교착 상태 (Deadlock)</div>
+      <ul class="sc-steps">
+        <li>T1 <code>BEGIN</code></li>
+        <li>T2 <code>BEGIN</code></li>
+        <li>T1 <code>WRITE row1=999</code> → X Lock 획득</li>
+        <li>T2 <code>WRITE row2=222</code> → X Lock 획득</li>
+        <li>T1 <code>WRITE row2=999</code> → T2 X Lock 대기 (BLOCKED)</li>
+        <li>T2 <code>WRITE row1=111</code> → T1 X Lock 대기</li>
+        <li class="result">🔴 DEADLOCK 감지 → T2 강제 중단</li>
+        <li class="result ok">✓ T1 UNBLOCKED, 재개 가능</li>
+      </ul>
+      <button class="sc-btn" onclick="runScenario('deadlock')">▶ 자동 실행</button>
+    </div>
+
+    <div class="sc-card">
+      <span class="sc-tag dirty">Dirty Read</span>
+      <div class="sc-title">더티 리드 재현</div>
+      <ul class="sc-steps">
+        <li>격리 수준: <code>Read Uncommitted</code>으로 변경</li>
+        <li>T1 <code>BEGIN</code></li>
+        <li>T2 <code>BEGIN</code></li>
+        <li>T2 <code>WRITE row1=999</code> (미커밋)</li>
+        <li>T1 <code>READ row1</code> → uncommitted 999 읽음</li>
+        <li>T2 <code>ROLLBACK</code></li>
+        <li class="result">⚠ T1이 읽은 999는 존재하지 않음</li>
+        <li class="result ok">✓ Read Committed이면 100 읽음</li>
+      </ul>
+      <button class="sc-btn" onclick="runScenario('dirty')">▶ 자동 실행</button>
+    </div>
+
+    <div class="sc-card">
+      <span class="sc-tag nonrep">Non-repeatable</span>
+      <div class="sc-title">반복 불가능한 읽기</div>
+      <ul class="sc-steps">
+        <li>격리 수준: <code>Read Committed</code></li>
+        <li>T1 <code>BEGIN</code></li>
+        <li>T1 <code>READ row1</code> → 100</li>
+        <li>T2 <code>BEGIN</code> → <code>WRITE row1=999</code> → <code>COMMIT</code></li>
+        <li>T1 <code>READ row1</code> → 999 (값 변경됨)</li>
+        <li class="result">⚠ 같은 쿼리인데 결과가 달라짐</li>
+        <li class="result ok">✓ Repeatable Read이면 100 유지</li>
+      </ul>
+      <button class="sc-btn" onclick="runScenario('nonrep')">▶ 자동 실행</button>
+    </div>
+
+    <div class="sc-card">
+      <span class="sc-tag phantom">Lock Upgrade</span>
+      <div class="sc-title">S → X Lock 업그레이드</div>
+      <ul class="sc-steps">
+        <li>격리 수준: <code>Repeatable Read</code></li>
+        <li>T1 <code>BEGIN</code> → <code>READ row1</code> → S Lock</li>
+        <li>T2 <code>BEGIN</code> → <code>READ row1</code> → S Lock (호환)</li>
+        <li>T1 <code>WRITE row1=999</code> → X Lock 업그레이드 시도</li>
+        <li class="result">⏸ T2가 S Lock 보유 → T1 BLOCKED</li>
+        <li>T2 <code>COMMIT</code></li>
+        <li class="result ok">✓ T2 해제 → T1 X Lock 획득 가능</li>
+      </ul>
+      <button class="sc-btn" onclick="runScenario('upgrade')">▶ 자동 실행</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  LOCK MANAGER — 실제 호환성 검사 + Wait Queue + Deadlock
+// ═══════════════════════════════════════════════════════════
+const COMPAT = { S:{S:true,X:false}, X:{S:false,X:false} };
+
+class LockManager {
+  constructor(){
+    this.held={};     // rowId → [{txId,type}]
+    this.waiting=[];  // [{txId,rowId,type}]
+    this.waitFor={};  // txId → Set<txId>  (wait-for graph)
+  }
+
+  acquire(txId, rowId, type){
+    if(!this.held[rowId]) this.held[rowId]=[];
+    const h = this.held[rowId];
+
+    // 이미 보유 중인 lock 확인
+    const own = h.find(l=>l.txId===txId);
+    if(own){
+      if(own.type==='X' || type==='S') return 'GRANTED'; // 이미 충분
+      // S→X 업그레이드 시도
+      const others = h.filter(l=>l.txId!==txId);
+      if(others.length===0){ own.type='X'; return 'GRANTED'; }
+      // 다른 S 보유자 있음 → 대기
+      const blockers = [...new Set(others.map(l=>l.txId))];
+      return this._block(txId, rowId, type, blockers);
+    }
+
+    // 충돌 검사
+    const conflicts = h.filter(l=>l.txId!==txId && !COMPAT[type][l.type]);
+    if(conflicts.length===0){
+      h.push({txId,type}); return 'GRANTED';
+    }
+
+    const blockers = [...new Set(conflicts.map(l=>l.txId))];
+    return this._block(txId, rowId, type, blockers);
+  }
+
+  _block(txId, rowId, type, blockers){
+    if(!this.waitFor[txId]) this.waitFor[txId]=new Set();
+    blockers.forEach(b=>this.waitFor[txId].add(b));
+
+    // Deadlock 감지 (DFS cycle)
+    if(this._hasCycle(txId, new Set())){
+      blockers.forEach(b=>this.waitFor[txId].delete(b));
+      if(!this.waitFor[txId].size) delete this.waitFor[txId];
+      return 'DEADLOCK';
+    }
+
+    if(!this.waiting.find(w=>w.txId===txId&&w.rowId===rowId)){
+      this.waiting.push({txId,rowId,type});
+    }
+    return 'BLOCKED';
+  }
+
+  _hasCycle(start, visited){
+    if(visited.has(start)) return true;
+    visited.add(start);
+    const wf = this.waitFor[start];
+    if(!wf) return false;
+    for(const t of wf){ if(this._hasCycle(t, new Set(visited))) return true; }
+    return false;
+  }
+
+  release(txId){
+    // 모든 보유 lock 해제
+    Object.keys(this.held).forEach(rowId=>{
+      this.held[rowId]=this.held[rowId].filter(l=>l.txId!==txId);
+    });
+    // wait-for graph에서 제거
+    delete this.waitFor[txId];
+    Object.values(this.waitFor).forEach(s=>s.delete(txId));
+    // waiting queue에서 제거
+    this.waiting=this.waiting.filter(w=>w.txId!==txId);
+    // 깨울 수 있는 트랜잭션 확인
+    return this._tryWakeup();
+  }
+
+  _tryWakeup(){
+    const woken=[];
+    let changed=true;
+    while(changed){
+      changed=false;
+      for(let i=0;i<this.waiting.length;i++){
+        const w=this.waiting[i];
+        const h=this.held[w.rowId]||[];
+        const conflicts=h.filter(l=>l.txId!==w.txId&&!COMPAT[w.type][l.type]);
+        if(conflicts.length===0){
+          if(!this.held[w.rowId]) this.held[w.rowId]=[];
+          // 업그레이드면 기존 S→X
+          const own=this.held[w.rowId].find(l=>l.txId===w.txId);
+          if(own) own.type=w.type;
+          else this.held[w.rowId].push({txId:w.txId,type:w.type});
+          delete this.waitFor[w.txId];
+          this.waiting.splice(i,1);
+          woken.push(w.txId);
+          changed=true; break;
+        }
+      }
+    }
+    return woken;
+  }
+
+  isBlocked(txId){ return this.waiting.some(w=>w.txId===txId); }
+
+  getHeldForRow(rowId){ return (this.held[rowId]||[]).slice(); }
+
+  getAllHeld(){
+    const res=[];
+    Object.entries(this.held).forEach(([rowId,locks])=>{
+      locks.forEach(l=>res.push({rowId:parseInt(rowId),txId:l.txId,type:l.type}));
+    });
+    return res;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  MVCC — 버전 체인
+// ═══════════════════════════════════════════════════════════
+let globalTs=0;
+const INIT_ROWS=[{id:1,name:'row1',value:100},{id:2,name:'row2',value:200},{id:3,name:'row3',value:300}];
+
+class MvccDB {
+  constructor(){
+    this.chains={};
+    INIT_ROWS.forEach(r=>{
+      this.chains[r.id]=[{value:r.value,txId:null,committed:true,ts:0}];
+    });
+  }
+
+  read(txId, rowId, iso, snapshotTs){
+    const chain=this.chains[rowId];
+    if(!chain||!chain.length) return null;
+    if(iso===0){
+      // Read Uncommitted: 최신 버전 (dirty OK)
+      return chain[chain.length-1].value;
+    }
+    if(iso===1){
+      // Read Committed: 최신 커밋 버전
+      for(let i=chain.length-1;i>=0;i--){
+        if(chain[i].committed || chain[i].txId===txId) return chain[i].value;
+      }
+    }
+    if(iso>=2){
+      // Repeatable Read / Serializable: snapshot
+      for(let i=chain.length-1;i>=0;i--){
+        const v=chain[i];
+        if(v.txId===txId) return v.value; // 자신의 쓰기
+        if(v.committed && v.ts<=snapshotTs) return v.value;
+      }
+    }
+    return chain[0].value;
+  }
+
+  write(txId, rowId, value){
+    if(!this.chains[rowId]) this.chains[rowId]=[];
+    // 같은 tx의 미커밋 버전 교체
+    this.chains[rowId]=this.chains[rowId].filter(v=>!(v.txId===txId&&!v.committed));
+    this.chains[rowId].push({value,txId,committed:false,ts:++globalTs});
+  }
+
+  commit(txId){
+    const ts=++globalTs;
+    Object.values(this.chains).forEach(chain=>{
+      chain.forEach(v=>{ if(v.txId===txId&&!v.committed){v.committed=true;v.ts=ts;} });
+    });
+  }
+
+  rollback(txId){
+    Object.keys(this.chains).forEach(rowId=>{
+      this.chains[rowId]=this.chains[rowId].filter(v=>!(v.txId===txId&&!v.committed));
+    });
+  }
+
+  getCommitted(rowId){
+    const chain=this.chains[rowId]||[];
+    for(let i=chain.length-1;i>=0;i--){ if(chain[i].committed) return chain[i].value; }
+    return null;
+  }
+
+  getUncommitted(rowId){
+    const chain=this.chains[rowId]||[];
+    const u=chain.filter(v=>!v.committed);
+    return u.length ? u[u.length-1] : null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  GLOBAL STATE
+// ═══════════════════════════════════════════════════════════
+let lm=new LockManager();
+let db=new MvccDB();
+let iso=1;
+let txs={
+  1:{id:1,status:'idle',snapshotTs:0},
+  2:{id:2,status:'idle',snapshotTs:0}
+};
+let logEntries=[], logCounter=0;
+
+// ═══════════════════════════════════════════════════════════
+//  OPERATIONS
+// ═══════════════════════════════════════════════════════════
+function beginTx(txId){
+  const tx=txs[txId];
+  if(tx.status==='active'||tx.status==='blocked'){
+    addLog(txId,'이미 활성 트랜잭션 존재','warn'); return;
+  }
+  tx.status='active';
+  tx.snapshotTs=globalTs;
+  addLog(txId,`BEGIN  (snapshot_ts=${globalTs})`,'info');
+  render();
+}
+
+function readRow(txId, rowId){
+  const tx=txs[txId];
+  if(!checkActive(txId)) return;
+
+  let lockResult='GRANTED';
+  if(iso===2||iso===3){
+    // Repeatable Read / Serializable: S lock 유지
+    lockResult=lm.acquire(txId,rowId,'S');
+  } else if(iso===1){
+    // Read Committed: lock 없이 MVCC로 해결 (실제 InnoDB 방식)
+    lockResult='GRANTED';
+  } else {
+    // Read Uncommitted: lock 없음
+    lockResult='GRANTED';
+  }
+
+  if(lockResult==='DEADLOCK'){
+    addLog(txId,`READ row${rowId} → 🔴 DEADLOCK! T${txId} 강제 중단`,'deadlock');
+    doAbort(txId,true); return;
+  }
+  if(lockResult==='BLOCKED'){
+    tx.status='blocked';
+    addLog(txId,`READ row${rowId} → ⏸ BLOCKED  (기다리는 중...)`,'warn');
+    render(); return;
+  }
+
+  const val=db.read(txId,rowId,iso,tx.snapshotTs);
+  const committed=db.getCommitted(rowId);
+  const uncommitted=db.getUncommitted(rowId);
+  const isDirty=uncommitted && uncommitted.txId!==txId && iso===0;
+  addLog(txId,`READ row${rowId} → ${val}${isDirty?' ⚠ dirty(uncommitted)':''}`,'info');
+  render();
+}
+
+function writeRow(txId, rowId, value){
+  const tx=txs[txId];
+  if(!checkActive(txId)) return;
+
+  const lockResult=lm.acquire(txId,rowId,'X');
+
+  if(lockResult==='DEADLOCK'){
+    addLog(txId,`WRITE row${rowId}=${value} → 🔴 DEADLOCK! T${txId} 강제 중단`,'deadlock');
+    doAbort(txId,true); return;
+  }
+  if(lockResult==='BLOCKED'){
+    tx.status='blocked';
+    const blockers=[...( lm.waitFor[txId]||[])].map(b=>`T${b}`).join(', ');
+    addLog(txId,`WRITE row${rowId}=${value} → ⏸ BLOCKED  (대기: ${blockers})`,'warn');
+    render(); return;
+  }
+
+  db.write(txId,rowId,value);
+  addLog(txId,`WRITE row${rowId} = ${value}  [X Lock 획득, 미커밋]`,'info');
+  render();
+}
+
+function commitTx(txId){
+  const tx=txs[txId];
+  if(tx.status==='idle'||tx.status==='committed'||tx.status==='aborted'){
+    addLog(txId,'활성 트랜잭션 없음','warn'); return;
+  }
+  db.commit(txId);
+  const woken=lm.release(txId);
+  tx.status='committed';
+  addLog(txId,`COMMIT ✓  (ts=${globalTs})`,'ok');
+  woken.forEach(wid=>{
+    txs[wid].status='active';
+    addLog(wid,`🟢 UNBLOCKED — Lock 획득, 작업 재개`,'unblock');
+  });
+  render();
+}
+
+function rollbackTx(txId){
+  const tx=txs[txId];
+  if(tx.status==='idle'){ addLog(txId,'활성 트랜잭션 없음','warn'); return; }
+  doAbort(txId,false);
+}
+
+function doAbort(txId,isDeadlock){
+  db.rollback(txId);
+  const woken=lm.release(txId);
+  txs[txId].status='aborted';
+  if(!isDeadlock) addLog(txId,'ROLLBACK','warn');
+  woken.forEach(wid=>{
+    txs[wid].status='active';
+    addLog(wid,`🟢 UNBLOCKED — Lock 획득, 작업 재개`,'unblock');
+  });
+  render();
+}
+
+function resetOneTx(txId){
+  lm.release(txId);
+  db.rollback(txId);
+  txs[txId]={id:txId,status:'idle',snapshotTs:0};
+  addLog(txId,'트랜잭션 초기화','warn');
+  render();
+}
+
+function checkActive(txId){
+  const tx=txs[txId];
+  if(tx.status==='idle'){ addLog(txId,'BEGIN을 먼저 실행하세요','warn'); return false; }
+  if(tx.status==='blocked'){ addLog(txId,'Lock 대기 중 — 조작 불가','warn'); return false; }
+  if(tx.status==='committed'||tx.status==='aborted'){ addLog(txId,'종료된 트랜잭션. Reset 후 재시작하세요','warn'); return false; }
+  return true;
+}
+
+function changeIso(v){ iso=parseInt(v); addLog(0,`격리 수준 변경: ${['Read Uncommitted','Read Committed','Repeatable Read','Serializable'][iso]}`,'sys'); render(); }
+function clearLog(){ logEntries=[]; renderLog(); }
+
+function fullReset(){
+  lm=new LockManager();
+  db=new MvccDB();
+  globalTs=0;
+  txs={1:{id:1,status:'idle',snapshotTs:0},2:{id:2,status:'idle',snapshotTs:0}};
+  logEntries=[];
+  addLog(0,'전체 초기화','sys');
+  render();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  AUTO SCENARIOS
+// ═══════════════════════════════════════════════════════════
+async function runScenario(name){
+  fullReset();
+  await delay(200);
+
+  if(name==='deadlock'){
+    beginTx(1); await delay(300);
+    beginTx(2); await delay(300);
+    writeRow(1,1,999); await delay(400);
+    writeRow(2,2,222); await delay(400);
+    writeRow(1,2,999); await delay(600);  // BLOCKED
+    writeRow(2,1,111); await delay(400);  // DEADLOCK
+  }
+  else if(name==='dirty'){
+    document.getElementById('iso-sel').value='0'; changeIso(0);
+    await delay(200);
+    beginTx(1); await delay(300);
+    beginTx(2); await delay(300);
+    writeRow(2,1,999); await delay(400);
+    readRow(1,1);      await delay(400);  // dirty read!
+    rollbackTx(2);     await delay(400);
+    addLog(1,'방금 읽은 999는 롤백으로 사라진 데이터입니다 ⚠','warn');
+    render();
+  }
+  else if(name==='nonrep'){
+    document.getElementById('iso-sel').value='1'; changeIso(1);
+    await delay(200);
+    beginTx(1); await delay(300);
+    readRow(1,1); await delay(400);  // 100
+    beginTx(2); await delay(200);
+    writeRow(2,1,999); await delay(300);
+    commitTx(2); await delay(400);
+    readRow(1,1); await delay(300);  // 999 (non-repeatable!)
+    addLog(1,'같은 쿼리인데 100 → 999로 달라짐 ⚠','warn');
+    render();
+  }
+  else if(name==='upgrade'){
+    document.getElementById('iso-sel').value='2'; changeIso(2);
+    await delay(200);
+    beginTx(1); await delay(300);
+    readRow(1,1); await delay(400);   // S lock T1
+    beginTx(2); await delay(300);
+    readRow(2,1); await delay(400);   // S lock T2 (호환)
+    writeRow(1,1,999); await delay(500); // S→X 업그레이드 시도 → BLOCKED
+    addLog(1,'T2가 S Lock 보유 중이라 X로 업그레이드 대기','warn');
+    await delay(600);
+    commitTx(2); await delay(400);    // T2 해제 → T1 unblocked
+  }
+}
+
+function delay(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+// ═══════════════════════════════════════════════════════════
+//  LOG
+// ═══════════════════════════════════════════════════════════
+function addLog(txId, msg, type){
+  logEntries.push({t:++logCounter, txId, msg, type});
+  if(logEntries.length>60) logEntries.shift();
+  renderLog();
+}
+
+function renderLog(){
+  const el=document.getElementById('log-body');
+  el.innerHTML='';
+  logEntries.forEach(e=>{
+    const d=document.createElement('div');
+    d.className='log-entry';
+    const txLabel=e.txId===0?'SYS':('T'+e.txId);
+    const txClass=e.txId===1?'t1':e.txId===2?'t2':'';
+    const msgClass=e.type==='ok'?'ok':e.type==='warn'?'warn':e.type==='deadlock'?'deadlock':e.type==='unblock'?'unblock':e.type==='err'?'err':'';
+    d.innerHTML=`<span class="log-t">${e.t}</span><span class="log-tx ${txClass}">${txLabel}</span><span class="log-msg ${msgClass}">${e.msg}</span>`;
+    el.appendChild(d);
+  });
+  el.scrollTop=el.scrollHeight;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════
+function render(){
+  document.getElementById('ts-label').textContent=`ts=${globalTs}`;
+  renderDB();
+  renderLM();
+  renderWFG();
+  renderTxStatus();
+}
+
+function renderDB(){
+  const el=document.getElementById('db-view');
+  // Keep header
+  el.innerHTML=`<div class="db-row hdr"><span>id</span><span>name</span><span>committed</span><span>uncommitted</span><span>locks</span></div>`;
+
+  INIT_ROWS.forEach(r=>{
+    const rowId=r.id;
+    const committed=db.getCommitted(rowId);
+    const uncommitted=db.getUncommitted(rowId);
+    const locks=lm.getHeldForRow(rowId);
+    const waiting=lm.waiting.filter(w=>w.rowId===rowId);
+
+    // Build lock badges
+    let badgesHtml='';
+    locks.forEach(l=>{
+      badgesHtml+=`<span class="lbadge ${l.type}">T${l.txId}:${l.type}</span>`;
+    });
+    waiting.forEach(w=>{
+      badgesHtml+=`<span class="lbadge W">T${w.txId}:WAIT</span>`;
+    });
+
+    const initVal=INIT_ROWS.find(x=>x.id===rowId).value;
+    const committedChanged=committed!==null&&committed!==initVal;
+    const uEntry=uncommitted;
+
+    el.innerHTML+=`
+      <div class="db-row">
+        <span>${rowId}</span>
+        <span>${r.name}</span>
+        <span class="val-cell ${committedChanged?'changed':''}">${committed??'—'}</span>
+        <span class="val-cell dirty">${uEntry?`${uEntry.value} (T${uEntry.txId})`:'—'}</span>
+        <span><div class="lock-badges">${badgesHtml||'<span style="font-size:10px;color:var(--text3)">없음</span>'}</div></span>
+      </div>`;
+  });
+}
+
+function renderLM(){
+  const held=lm.getAllHeld();
+  const hEl=document.getElementById('held-locks');
+  if(!held.length){ hEl.innerHTML='<div class="empty-note">없음</div>'; }
+  else{
+    hEl.innerHTML='';
+    held.forEach(l=>{
+      const d=document.createElement('div');
+      d.className='lock-entry held-'+l.type;
+      d.innerHTML=`<span>T${l.txId} → row${l.rowId}</span><span>${l.type} Lock</span>`;
+      hEl.appendChild(d);
+    });
+  }
+
+  const wEl=document.getElementById('wait-queue');
+  if(!lm.waiting.length){ wEl.innerHTML='<div class="empty-note">없음</div>'; }
+  else{
+    wEl.innerHTML='';
+    lm.waiting.forEach(w=>{
+      const blockers=[...(lm.waitFor[w.txId]||[])].map(b=>`T${b}`).join(',');
+      const d=document.createElement('div');
+      d.className='lock-entry wait';
+      d.innerHTML=`<span>T${w.txId} → row${w.rowId} (${w.type})</span><span>wait: ${blockers}</span>`;
+      wEl.appendChild(d);
+    });
+  }
+}
+
+function renderWFG(){
+  const t1WaitsT2=lm.waitFor[1]&&lm.waitFor[1].has(2);
+  const t2WaitsT1=lm.waitFor[2]&&lm.waitFor[2].has(1);
+  const hasWait=t1WaitsT2||t2WaitsT1;
+  const deadlock=t1WaitsT2&&t2WaitsT1;
+
+  document.getElementById('wfg-empty').style.display=hasWait?'none':'block';
+  document.getElementById('wfg-content').style.display=hasWait?'block':'none';
+  document.getElementById('wfg-t1t2').style.display=t1WaitsT2?'block':'none';
+  document.getElementById('wfg-t2t1').style.display=t2WaitsT1?'block':'none';
+  document.getElementById('wfg-deadlock-label').style.display=deadlock?'block':'none';
+}
+
+function renderTxStatus(){
+  [1,2].forEach(id=>{
+    const tx=txs[id];
+    const sEl=document.getElementById(`t${id}-status`);
+    const snEl=document.getElementById(`t${id}-snapshot`);
+    const statusMap={idle:'idle',active:'active',blocked:'blocked',committed:'committed',aborted:'aborted'};
+    const classMap={idle:'st-idle',active:'st-active',blocked:'st-blocked',committed:'st-committed',aborted:'st-aborted'};
+    const labelMap={idle:'idle',active:'active',blocked:'⏸ blocked',committed:'committed ✓',aborted:'aborted ✗'};
+    sEl.className=`tx-status ${classMap[tx.status]}${id===2&&tx.status==='active'?' t2':''}`;
+    sEl.textContent=labelMap[tx.status]||tx.status;
+    snEl.textContent=`snapshot_ts: ${tx.status==='idle'?'—':tx.snapshotTs}  |  status: ${tx.status}`;
+  });
+}
+
+// 초기 렌더
+addLog(0,'시뮬레이터 초기화 완료. BEGIN으로 트랜잭션을 시작하세요.','sys');
+render();
+</script>
+</body>
+</html>
